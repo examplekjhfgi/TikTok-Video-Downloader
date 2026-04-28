@@ -1,6 +1,5 @@
 import os
 import time
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from playwright.sync_api import sync_playwright
@@ -9,73 +8,83 @@ from playwright.sync_api import sync_playwright
 BOT_TOKEN = "8762302157:AAFYdQrIqJqNUy-I35QIbDsQ8RLNZapIb4o"
 MONETAG_LINK = "https://omg10.com/4/10936408"
 
-# টিকটক ভিডিও লিঙ্ক স্ক্র্যাপ করার ফাংশন
+# ভিডিও ইউআরএল জমা রাখার জন্য একটি ডিকশনারি (টেম্পোরারি স্টোরেজ)
+user_data_store = {}
+
 def get_ssstik_video(tiktok_url):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
+            # সাইট লোড হওয়ার সময় একটু বেশি দেওয়া হয়েছে
             page.goto("https://ssstik.io/en", timeout=60000)
             
-            # লিঙ্ক ইনপুট এবং সার্চ
             page.fill('input[id="main_page_text"]', tiktok_url)
-            page.press('input[id="main_page_text"]', 'Enter')
+            page.click('button[id="submit"]')
             
-            # ডাউনলোড বাটন আসা পর্যন্ত অপেক্ষা
-            page.wait_for_selector('.download_link', timeout=10000)
+            # ডাউনলোড বাটন না আসা পর্যন্ত অপেক্ষা
+            page.wait_for_selector('.download_link', timeout=15000)
             
-            # প্রথম ডাউনলোড বাটন (Without Watermark) এর লিঙ্ক নেওয়া
             video_link = page.query_selector('.download_link').get_attribute('href')
             browser.close()
             return video_link
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Scraping Error: {e}")
         return None
 
-# স্টার্ট কমান্ড
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 স্বাগতম! যেকোনো টিকটক ভিডিওর লিঙ্ক দিন, আমি ওয়াটারমার্ক ছাড়া ডাউনলোড করে দেব।"
-    )
+    await update.message.reply_text("👋 স্বাগতম! টিকটক ভিডিওর লিঙ্ক দিন, আমি ওয়াটারমার্ক ছাড়া ডাউনলোড করে দেব।")
 
-# মেসেজ হ্যান্ডেলার
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if "tiktok.com" not in url:
-        await update.message.reply_text("❌ দয়া করে একটি সঠিক টিকটক ভিডিও লিঙ্ক দিন।")
+        await update.message.reply_text("❌ দয়া করে একটি সঠিক টিকটক লিঙ্ক দিন।")
         return
 
-    # ইউজারকে অ্যাড দেখানোর বাটন
+    # এরর এড়াতে ইউজার আইডি দিয়ে লিঙ্কটি স্টোর করা হচ্ছে
+    user_id = update.message.from_user.id
+    user_data_store[user_id] = url
+
     keyboard = [
-        [InlineKeyboardButton("✅ Get Download Link (Watch Ad)", url=MONETAG_LINK)],
-        [InlineKeyboardButton("📩 Download Video", callback_data=f"dl|{url}")]
+        [InlineKeyboardButton("✅ Step 1: Watch Ad", url=MONETAG_LINK)],
+        [InlineKeyboardButton("📩 Step 2: Download Video", callback_data="download_now")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🚀 ভিডিওটি প্রস্তুত! নিচের লিংকে ক্লিক করে ১টি অ্যাড দেখুন, তারপর 'Download Video' বাটনে ক্লিক করুন।",
+        "🚀 ভিডিওটি প্রস্তুত! প্রথমে উপরের বাটনে ক্লিক করে অ্যাডটি দেখুন, তারপর নিচের ডাউনলোড বাটনে ক্লিক করুন।",
         reply_markup=reply_markup
     )
 
-# ডাউনলোড বাটন ক্লিক হ্যান্ডেলার
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     await query.answer()
     
-    data = query.data.split("|")
-    if data[0] == "dl":
-        tiktok_url = data[1]
-        sent_message = await query.edit_message_text("🔄 প্রসেসিং হচ্ছে... দয়া করে অপেক্ষা করুন।")
+    if query.data == "download_now":
+        # স্টোর থেকে লিঙ্কটি খুঁজে বের করা
+        tiktok_url = user_data_store.get(user_id)
+        
+        if not tiktok_url:
+            await query.edit_message_text("❌ সেশন শেষ হয়ে গেছে। আবার লিঙ্কটি পাঠান।")
+            return
+
+        sent_message = await query.edit_message_text("🔄 ভিডিও প্রসেস করা হচ্ছে... (৫-১০ সেকেন্ড সময় লাগতে পারে)")
         
         video_download_url = get_ssstik_video(tiktok_url)
         
         if video_download_url:
-            await query.message.reply_video(video=video_download_url, caption="✅ ওয়াটারমার্ক ছাড়া ভিডিও ডাউনলোড সম্পন্ন!")
-            await sent_message.delete()
+            try:
+                await query.message.reply_video(video=video_download_url, caption="✅ ওয়াটারমার্ক ছাড়া ডাউনলোড সম্পন্ন!")
+                await sent_message.delete()
+                # কাজ শেষে মেমোরি ক্লিয়ার করা
+                if user_id in user_data_store:
+                    del user_data_store[user_id]
+            except Exception as e:
+                await query.edit_message_text(f"❌ ভিডিও পাঠাতে সমস্যা হয়েছে: {e}")
         else:
-            await query.edit_message_text("❌ দুঃখিত! ভিডিওটি পাওয়া যায়নি। আবার চেষ্টা করুন।")
+            await query.edit_message_text("❌ ভিডিও লিঙ্কটি পাওয়া যায়নি। আবার চেষ্টা করুন।")
 
-# মেইন ফাংশন
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
